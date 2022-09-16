@@ -1,7 +1,5 @@
 # node-authentication
 
-This is 
-
 ## Description
 
 this is an simple example of how to made the authentication in the QI Tech APIs with node.
