@@ -3,6 +3,8 @@ const jose = require("jose")
 const crypto = require('crypto');
 const datetime = require('node-datetime');
 const jwt_decode = require('jwt-decode');
+var FormData = require('form-data');
+var fs = require('fs');
 
 const CLIENT_PRIVATE_KEY = `-----BEGIN EC PRIVATE KEY-----
 MIHcAgEBBEIBell7txNDr4xYXlDeUO4ySCNRlguHisiC5nUgWDS96j4K2wPksMSA
@@ -25,6 +27,13 @@ hhIek47tcCGBcbHCWsngMv0bSEfw+KRj3deWzopbI5xHj6DJZi5TrgFxF+3/GKMR
 
 const QI_AUTH_ADDRESS = 'https://api-auth.sandbox.qitech.app';
 const RESPONSE_MINUTES_TOLERANCE = 5;
+
+const file_path = '.\\identificacao_teste.pdf'
+
+const config = {
+    'main': true,
+    'upload': true
+}
 
 async function qi_sign_message(
     endpoint,
@@ -64,6 +73,57 @@ async function qi_sign_message(
         md5_body = crypto.createHash('md5').update(encoded_body_token).digest('hex')
 
     }
+
+    const string_to_sign = (
+        method + "\n" + md5_body + "\n" + content_type + "\n" + formated_date + "\n" + endpoint
+    )
+
+    const headers = {"alg": "ES512", "typ": "JWT"}
+    const claims = {"sub": api_key, "signature": string_to_sign}
+
+    const encoded_header_token = await new jose.SignJWT(claims)
+        .setProtectedHeader({ alg: 'ES512' })
+        .setProtectedHeader(headers)
+        .sign(privateKey)
+
+    const authorization = "QIT" + " " + api_key + ":" + encoded_header_token
+
+    let request_header = {"AUTHORIZATION": authorization, "API-CLIENT-KEY": api_key}
+
+    if (additional_headers) {
+        request_header.update(additional_headers)
+    }
+    
+    return {request_header, request_body}
+};
+
+async function qi_sign_upload_message(
+    endpoint,
+    method,
+    api_key,
+    client_private_key,
+    body=null,
+    content_type="",
+    additional_headers=null,
+) {
+
+    let privateKey = client_private_key
+  
+    privateKey = crypto.createPrivateKey({
+        key: privateKey,
+        format: "pem",
+        type: "pkcs1",
+        passphrase: "",
+        encoding: "utf-8"
+      })
+
+    let md5_body = ''
+    let request_body = null
+
+    let now = new Date();
+    let formated_date = now.toUTCString()
+
+    md5_body = await crypto.createHash('md5').update(body.toString(),  "binary").digest('hex')
 
     const string_to_sign = (
         method + "\n" + md5_body + "\n" + content_type + "\n" + formated_date + "\n" + endpoint
@@ -235,6 +295,59 @@ async function post_request(endpoint, method, body, content_type) {
 
 };
 
+async function upload_request(endpoint, method, body, content_type) {
+
+    const url = `${QI_AUTH_ADDRESS}${endpoint}`
+
+    var formData = new FormData();
+
+    const readStream = await fs.createReadStream(body)
+    
+    body_to_send = await fs.readFileSync(body, 'binary')
+
+    formData.append('file', readStream);
+
+    let signed_request = await qi_sign_upload_message(endpoint, method, API_KEY, CLIENT_PRIVATE_KEY, body_to_send)
+
+    const request_config = {
+        headers: signed_request.request_header
+      };
+
+    console.log(`URL: ${url}`)
+    console.log(`Header Authorization: ${signed_request.request_header.AUTHORIZATION}`)
+    console.log(`Header API-CLIENT-KEY: ${signed_request.request_header['API-CLIENT-KEY']}`)
+    console.log(`BODY: TOO LARGE`)
+
+    let response_body = null
+    let respponse_header = null
+    let final_response = null
+
+    final_response = await axios.post(url, formData, request_config)
+    .then(function (response) {
+
+        response_body = response.data
+        respponse_header = response.headers
+      
+        translated_response = qi_translate_message(
+            endpoint,
+            method,
+            API_KEY,
+            response_body,
+            respponse_header
+        )
+
+        return translated_response
+
+    })
+    .catch(function (error) {
+        console.log(error)
+        return null
+    });
+
+    return final_response
+
+};
+
 async function main() {
 
     const endpoint = `/test/${API_KEY}`
@@ -247,4 +360,22 @@ async function main() {
     console.log(response)
 }
 
-main()
+async function upload() {
+
+    const endpoint = `/upload`
+    const method = "POST"
+    const body = file_path
+    const content_type = "application/json"
+
+    const response = await upload_request(endpoint, method, body, content_type)
+
+    console.log(response)
+}
+
+if(config['main']) {
+    main()
+}
+
+if(config['upload']) {
+    upload()
+}
